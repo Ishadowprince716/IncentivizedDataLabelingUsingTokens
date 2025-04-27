@@ -41,11 +41,16 @@ contract DataLabelingIncentives {
     // Function to reward users for labeling data
     function submitLabel(uint256 dataId, string memory label) public whenNotPaused {
         require(tokenBalance[msg.sender] >= submissionFee, "Insufficient balance to pay submission fee");
-        tokenBalance[msg.sender] -= submissionFee; // Deduct submission fee
+        
+        // Deduct submission fee and update labeled data
+        tokenBalance[msg.sender] -= submissionFee; 
         labeledData[dataId] = label;
-        tokenBalance[msg.sender] += rewardRate; // Reward users based on the reward rate
+
+        // Reward users based on the reward rate
+        tokenBalance[msg.sender] += rewardRate; 
         labelsSubmitted[msg.sender] += 1; // Increment labels submitted
-        updateUserLevel(msg.sender); // Update user level
+        updateUser Level(msg.sender); // Update user level
+
         emit DataLabeled(msg.sender, dataId, label, rewardRate);
     }
 
@@ -78,18 +83,47 @@ contract DataLabelingIncentives {
         emit TokensTransferred(msg.sender, to, amount);
     }
 
-    // Simulated withdraw of rewards
+    // Withdraw rewards
     function withdrawRewards() public whenNotPaused {
         uint256 amount = tokenBalance[msg.sender];
         require(amount > 0, "No rewards to withdraw");
-        tokenBalance[msg.sender] = 0;
+        tokenBalance[msg.sender] = 0; // Reset balance before transferring to prevent reentrancy
         emit RewardWithdrawn(msg.sender, amount);
     }
 
     // Mint new tokens
     function mintTokens(address to, uint256 amount) public onlyOwner {
+        require(to != address(0), "Cannot mint to the zero address");
         tokenBalance[to] += amount;
         totalSupply += amount;
-        emit Tokens
+        emit TokensMinted(to, amount);
+    }
 
+    // Burn tokens
+    function burnTokens(uint256 amount) public whenNotPaused {
+        require(tokenBalance[msg.sender] >= amount, "Insufficient balance to burn");
+        tokenBalance[msg.sender] -= amount;
+        totalSupply -= amount;
+        emit TokensBurned(msg.sender, amount);
+    }
 
+    // Update reward rate
+    function updateRewardRate(uint256 newRate) public onlyOwner {
+        rewardRate = newRate;
+        emit RewardRateUpdated(newRate);
+    }
+
+    // Update submission fee
+    function updateSubmissionFee(uint256 newFee) public onlyOwner {
+        submissionFee = newFee;
+        emit SubmissionFeeUpdated(newFee);
+    }
+
+    // Pause contract
+    function pauseContract() public onlyOwner {
+        paused = true;
+        emit ContractPaused();
+    }
+
+    // Unpause contract
+   
