@@ -1,81 +1,81 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
-contract DataLabelingIncentives {
-    address public owner;
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+
+contract DataLabelingIncentives is Ownable, Pausable, Initializable {
+    struct Label {
+        string value;
+        address submitter;
+        uint256 timestamp;
+        uint8 upvotes;
+        uint8 downvotes;
+    }
+
     mapping(address => uint256) public tokenBalance;
-    mapping(uint256 => string) public labeledData;
+    mapping(uint256 => Label[]) public labeledData;
     mapping(address => uint256) public userLevel;
     mapping(address => uint256) public labelsSubmitted;
+    mapping(address => int256) public userReputation;
+    mapping(address => bool) public moderators;
+
     uint256 public totalSupply;
-    uint256 public rewardRate = 10; // Default reward rate
-    uint256 public submissionFee = 1; // Fee for submitting a label
-    bool public paused = false;
+    uint256 public rewardRate;
+    uint256 public submissionFee;
 
     event DataLabeled(address indexed user, uint256 indexed dataId, string label, uint256 reward);
     event RewardWithdrawn(address indexed user, uint256 amount);
-    event LabelUpdated(uint256 indexed dataId, string newLabel);
+    event LabelUpdated(uint256 indexed dataId, uint256 indexed labelIndex, string newLabel);
     event TokensTransferred(address indexed from, address indexed to, uint256 amount);
     event TokensMinted(address indexed to, uint256 amount);
     event TokensBurned(address indexed from, uint256 amount);
     event RewardRateUpdated(uint256 newRate);
     event SubmissionFeeUpdated(uint256 newFee);
-    event ContractPaused();
-    event ContractUnpaused();
     event UserLevelUpdated(address indexed user, uint256 newLevel);
+    event ReputationUpdated(address indexed user, int256 reputation);
+    event ModeratorAdded(address indexed moderator);
+    event ModeratorRemoved(address indexed moderator);
 
-    constructor() {
-        owner = msg.sender;
-    }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
+    modifier onlyModerator() {
+        require(moderators[msg.sender], "Not a moderator");
         _;
     }
 
-    modifier whenNotPaused() {
-        require(!paused, "Contract is paused");
-        _;
+    function initialize(uint256 _rewardRate, uint256 _submissionFee) external initializer {
+        rewardRate = _rewardRate;
+        submissionFee = _submissionFee;
+        _transferOwnership(msg.sender);
     }
 
-    // Function to reward users for labeling data
     function submitLabel(uint256 dataId, string memory label) public whenNotPaused {
-        require(tokenBalance[msg.sender] >= submissionFee, "Insufficient balance to pay submission fee");
-        
-        // Deduct submission fee and update labeled data
-        tokenBalance[msg.sender] -= submissionFee; 
-        labeledData[dataId] = label;
-
-        // Reward users based on the reward rate
-        tokenBalance[msg.sender] += rewardRate; 
-        labelsSubmitted[msg.sender] += 1; // Increment labels submitted
-        updateUser Level(msg.sender); // Update user level
-
+        require(tokenBalance[msg.sender] >= submissionFee, "Insufficient balance");
+        tokenBalance[msg.sender] -= submissionFee;
+        labeledData[dataId].push(Label(label, msg.sender, block.timestamp, 0, 0));
+        tokenBalance[msg.sender] += rewardRate;
+        labelsSubmitted[msg.sender]++;
+        _updateUserLevel(msg.sender);
         emit DataLabeled(msg.sender, dataId, label, rewardRate);
     }
 
-    // Function to check the token balance
-    function getBalance(address user) public view returns (uint256) {
-        return tokenBalance[user];
+    function voteOnLabel(uint256 dataId, uint256 labelIndex, bool upvote) external whenNotPaused {
+        Label storage label = labeledData[dataId][labelIndex];
+        if (upvote) {
+            label.upvotes++;
+            userReputation[label.submitter]++;
+        } else {
+            label.downvotes++;
+            userReputation[label.submitter]--;
+        }
+        emit ReputationUpdated(label.submitter, userReputation[label.submitter]);
     }
 
-    // Admin can reset a user's balance
-    function resetBalance(address user) public onlyOwner {
-        tokenBalance[user] = 0;
+    function updateLabel(uint256 dataId, uint256 labelIndex, string memory newLabel) public onlyModerator {
+        labeledData[dataId][labelIndex].value = newLabel;
+        emit LabelUpdated(dataId, labelIndex, newLabel);
     }
 
-    // View label of a specific dataId
-    function getLabel(uint256 dataId) public view returns (string memory) {
-        return labeledData[dataId];
-    }
-
-    // Owner can update a submitted label
-    function updateLabel(uint256 dataId, string memory newLabel) public onlyOwner {
-        labeledData[dataId] = newLabel;
-        emit LabelUpdated(dataId, newLabel);
-    }
-
-    // Transfer earned tokens to another user
     function transferTokens(address to, uint256 amount) public whenNotPaused {
         require(tokenBalance[msg.sender] >= amount, "Insufficient balance");
         tokenBalance[msg.sender] -= amount;
@@ -83,47 +83,66 @@ contract DataLabelingIncentives {
         emit TokensTransferred(msg.sender, to, amount);
     }
 
-    // Withdraw rewards
     function withdrawRewards() public whenNotPaused {
         uint256 amount = tokenBalance[msg.sender];
         require(amount > 0, "No rewards to withdraw");
-        tokenBalance[msg.sender] = 0; // Reset balance before transferring to prevent reentrancy
+        tokenBalance[msg.sender] = 0;
         emit RewardWithdrawn(msg.sender, amount);
     }
 
-    // Mint new tokens
     function mintTokens(address to, uint256 amount) public onlyOwner {
-        require(to != address(0), "Cannot mint to the zero address");
+        require(to != address(0), "Cannot mint to zero address");
         tokenBalance[to] += amount;
         totalSupply += amount;
         emit TokensMinted(to, amount);
     }
 
-    // Burn tokens
     function burnTokens(uint256 amount) public whenNotPaused {
-        require(tokenBalance[msg.sender] >= amount, "Insufficient balance to burn");
+        require(tokenBalance[msg.sender] >= amount, "Insufficient balance");
         tokenBalance[msg.sender] -= amount;
         totalSupply -= amount;
         emit TokensBurned(msg.sender, amount);
     }
 
-    // Update reward rate
     function updateRewardRate(uint256 newRate) public onlyOwner {
         rewardRate = newRate;
         emit RewardRateUpdated(newRate);
     }
 
-    // Update submission fee
     function updateSubmissionFee(uint256 newFee) public onlyOwner {
         submissionFee = newFee;
         emit SubmissionFeeUpdated(newFee);
     }
 
-    // Pause contract
     function pauseContract() public onlyOwner {
-        paused = true;
-        emit ContractPaused();
+        _pause();
     }
 
-    // Unpause contract
-   
+    function unpauseContract() public onlyOwner {
+        _unpause();
+    }
+
+    function addModerator(address mod) public onlyOwner {
+        moderators[mod] = true;
+        emit ModeratorAdded(mod);
+    }
+
+    function removeModerator(address mod) public onlyOwner {
+        moderators[mod] = false;
+        emit ModeratorRemoved(mod);
+    }
+
+    function _updateUserLevel(address user) internal {
+        uint256 newLevel = labelsSubmitted[user] / 10;
+        userLevel[user] = newLevel;
+        emit UserLevelUpdated(user, newLevel);
+    }
+
+    function getLabel(uint256 dataId, uint256 labelIndex) public view returns (Label memory) {
+        return labeledData[dataId][labelIndex];
+    }
+
+    function getBalance(address user) public view returns (uint256) {
+        return tokenBalance[user];
+    }
+}
